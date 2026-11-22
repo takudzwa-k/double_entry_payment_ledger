@@ -84,6 +84,41 @@ INSERT INTO entries (transaction_id, account_id, currency, amount)
 SELECT t.id, v.account_id, v.currency, v.amount
 FROM t, (VALUES (1, 'USD', -1000), (3, 'USD', 1000)) AS v(account_id, currency, amount);
 
+-- VALID: transaction with a new idempotency key succeeds
+WITH t AS (
+  INSERT INTO transactions (kind, description, idempotency_key)
+  VALUES ('transfer', 'Tendai pays Shop $5', 'pay-order-1001') RETURNING id
+)
+INSERT INTO entries (transaction_id, account_id, currency, amount)
+SELECT t.id, v.account_id, v.currency, v.amount
+FROM t, (VALUES (2, 'USD', -500), (3, 'USD', 500)) AS v(account_id, currency, amount);
+
+-- SHOULD FAIL 8: duplicate idempotency key
+WITH t AS (
+  INSERT INTO transactions (kind, description, idempotency_key)
+  VALUES ('transfer', 'Tendai pays Shop $5 (retry)', 'pay-order-1001') RETURNING id
+)
+INSERT INTO entries (transaction_id, account_id, currency, amount)
+SELECT t.id, v.account_id, v.currency, v.amount
+FROM t, (VALUES (2, 'USD', -500), (3, 'USD', 500)) AS v(account_id, currency, amount);
+
+-- VALID: two transactions with no idempotency key both succeed
+WITH t AS (
+  INSERT INTO transactions (kind, description)
+  VALUES ('transfer', 'Tendai pays Shop $2 (no key 1)') RETURNING id
+)
+INSERT INTO entries (transaction_id, account_id, currency, amount)
+SELECT t.id, v.account_id, v.currency, v.amount
+FROM t, (VALUES (2, 'USD', -200), (3, 'USD', 200)) AS v(account_id, currency, amount);
+
+WITH t AS (
+  INSERT INTO transactions (kind, description)
+  VALUES ('transfer', 'Tendai pays Shop $3 (no key 2)') RETURNING id
+)
+INSERT INTO entries (transaction_id, account_id, currency, amount)
+SELECT t.id, v.account_id, v.currency, v.amount
+FROM t, (VALUES (2, 'USD', -300), (3, 'USD', 300)) AS v(account_id, currency, amount);
+
 -- FINAL BALANCES
 SELECT a.name, COALESCE(SUM(e.amount), 0) AS balance_cents
 FROM accounts a LEFT JOIN entries e ON e.account_id = a.id
