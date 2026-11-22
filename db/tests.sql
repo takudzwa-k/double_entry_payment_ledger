@@ -37,3 +37,54 @@ UPDATE entries SET amount = 999999 WHERE id = (SELECT MIN(id) FROM entries);
 
 -- SHOULD FAIL 5: deleting history
 DELETE FROM entries WHERE id = (SELECT MIN(id) FROM entries);
+
+-- VALID: spend less than the balance ($20 of $50)
+WITH t AS (
+  INSERT INTO transactions (kind, description)
+  VALUES ('transfer', 'Tendai pays Shop $20') RETURNING id
+)
+INSERT INTO entries (transaction_id, account_id, currency, amount)
+SELECT t.id, v.account_id, v.currency, v.amount
+FROM t, (VALUES (2, 'USD', -2000), (3, 'USD', 2000)) AS v(account_id, currency, amount);
+
+-- SHOULD FAIL 6: spend more than the balance ($40 when Tendai has $30)
+WITH t AS (
+  INSERT INTO transactions (kind, description)
+  VALUES ('transfer', 'Tendai tries to overspend $40') RETURNING id
+)
+INSERT INTO entries (transaction_id, account_id, currency, amount)
+SELECT t.id, v.account_id, v.currency, v.amount
+FROM t, (VALUES (2, 'USD', -4000), (3, 'USD', 4000)) AS v(account_id, currency, amount);
+
+-- SHOULD FAIL 7: two transfers in one transaction that together overdraw ($20 + $20 > $30)
+BEGIN;
+WITH t AS (
+  INSERT INTO transactions (kind, description)
+  VALUES ('transfer', 'Tendai pays Shop $20 (part 1)') RETURNING id
+)
+INSERT INTO entries (transaction_id, account_id, currency, amount)
+SELECT t.id, v.account_id, v.currency, v.amount
+FROM t, (VALUES (2, 'USD', -2000), (3, 'USD', 2000)) AS v(account_id, currency, amount);
+
+WITH t AS (
+  INSERT INTO transactions (kind, description)
+  VALUES ('transfer', 'Tendai pays Shop $20 (part 2)') RETURNING id
+)
+INSERT INTO entries (transaction_id, account_id, currency, amount)
+SELECT t.id, v.account_id, v.currency, v.amount
+FROM t, (VALUES (2, 'USD', -2000), (3, 'USD', 2000)) AS v(account_id, currency, amount);
+COMMIT;
+
+-- VALID: a system account going negative is allowed
+WITH t AS (
+  INSERT INTO transactions (kind, description)
+  VALUES ('deposit', 'System funds Shop wallet $10') RETURNING id
+)
+INSERT INTO entries (transaction_id, account_id, currency, amount)
+SELECT t.id, v.account_id, v.currency, v.amount
+FROM t, (VALUES (1, 'USD', -1000), (3, 'USD', 1000)) AS v(account_id, currency, amount);
+
+-- FINAL BALANCES
+SELECT a.name, COALESCE(SUM(e.amount), 0) AS balance_cents
+FROM accounts a LEFT JOIN entries e ON e.account_id = a.id
+GROUP BY a.id, a.name ORDER BY a.id;
