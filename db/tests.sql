@@ -119,6 +119,90 @@ INSERT INTO entries (transaction_id, account_id, currency, amount)
 SELECT t.id, v.account_id, v.currency, v.amount
 FROM t, (VALUES (2, 'USD', -300), (3, 'USD', 300)) AS v(account_id, currency, amount);
 
+-- VALID: reverse an earlier transfer correctly ('Tendai pays Shop $5')
+WITH orig AS (
+  SELECT id FROM transactions WHERE idempotency_key = 'pay-order-1001'
+),
+t AS (
+  INSERT INTO transactions (kind, description, reverses_id)
+  SELECT 'reversal', 'Reverse Tendai pays Shop $5', orig.id
+  FROM orig
+  RETURNING id
+)
+INSERT INTO entries (transaction_id, account_id, currency, amount)
+SELECT t.id, v.account_id, v.currency, v.amount
+FROM t, (VALUES (2, 'USD', 500), (3, 'USD', -500)) AS v(account_id, currency, amount);
+
+-- SHOULD FAIL 9: reversal with a wrong amount
+WITH orig AS (
+  SELECT id FROM transactions WHERE description = 'Tendai pays Shop $2 (no key 1)'
+),
+t AS (
+  INSERT INTO transactions (kind, description, reverses_id)
+  SELECT 'reversal', 'Wrong amount reversal', orig.id
+  FROM orig
+  RETURNING id
+)
+INSERT INTO entries (transaction_id, account_id, currency, amount)
+SELECT t.id, v.account_id, v.currency, v.amount
+FROM t, (VALUES (2, 'USD', 100), (3, 'USD', -100)) AS v(account_id, currency, amount);
+
+-- SHOULD FAIL 10: reversal missing one of the two lines
+WITH orig AS (
+  SELECT id FROM transactions WHERE description = 'Tendai pays Shop $2 (no key 1)'
+),
+t AS (
+  INSERT INTO transactions (kind, description, reverses_id)
+  SELECT 'reversal', 'Incomplete reversal (missing line)', orig.id
+  FROM orig
+  RETURNING id
+)
+INSERT INTO entries (transaction_id, account_id, currency, amount)
+SELECT t.id, 2, 'USD', 200
+FROM t;
+
+-- SHOULD FAIL 11: reversing the same transaction twice
+WITH orig AS (
+  SELECT id FROM transactions WHERE idempotency_key = 'pay-order-1001'
+),
+t AS (
+  INSERT INTO transactions (kind, description, reverses_id)
+  SELECT 'reversal', 'Duplicate reversal of $5 transfer', orig.id
+  FROM orig
+  RETURNING id
+)
+INSERT INTO entries (transaction_id, account_id, currency, amount)
+SELECT t.id, v.account_id, v.currency, v.amount
+FROM t, (VALUES (2, 'USD', 500), (3, 'USD', -500)) AS v(account_id, currency, amount);
+
+-- SHOULD FAIL 12: reversing a reversal
+WITH orig AS (
+  SELECT id FROM transactions WHERE description = 'Reverse Tendai pays Shop $5'
+),
+t AS (
+  INSERT INTO transactions (kind, description, reverses_id)
+  SELECT 'reversal', 'Reversal of a reversal', orig.id
+  FROM orig
+  RETURNING id
+)
+INSERT INTO entries (transaction_id, account_id, currency, amount)
+SELECT t.id, v.account_id, v.currency, v.amount
+FROM t, (VALUES (2, 'USD', -500), (3, 'USD', 500)) AS v(account_id, currency, amount);
+
+-- SHOULD FAIL 13: reversal that would overdraw an account (reversing $50 deposit when Tendai has $25)
+WITH orig AS (
+  SELECT id FROM transactions WHERE description = 'Tendai tops up $50'
+),
+t AS (
+  INSERT INTO transactions (kind, description, reverses_id)
+  SELECT 'reversal', 'Reverse Tendai $50 deposit (would overdraw)', orig.id
+  FROM orig
+  RETURNING id
+)
+INSERT INTO entries (transaction_id, account_id, currency, amount)
+SELECT t.id, v.account_id, v.currency, v.amount
+FROM t, (VALUES (1, 'USD', 5000), (2, 'USD', -5000)) AS v(account_id, currency, amount);
+
 -- FINAL BALANCES
 SELECT a.name, COALESCE(SUM(e.amount), 0) AS balance_cents
 FROM accounts a LEFT JOIN entries e ON e.account_id = a.id
