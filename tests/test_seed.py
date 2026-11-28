@@ -15,6 +15,9 @@ def test_seed_creates_six_accounts_with_expected_balances():
             cur.execute("SELECT COUNT(*) FROM accounts")
             assert int(cur.fetchone()[0]) == 6
 
+            cur.execute("SELECT handle, kind, pin_hash FROM accounts")
+            rows = {handle: (kind, pin_hash) for handle, kind, pin_hash in cur.fetchall()}
+
     expected = [
         ("sys-usd", "USD", -4500),
         ("sys-zig", "ZIG", -10000),
@@ -26,6 +29,13 @@ def test_seed_creates_six_accounts_with_expected_balances():
     for handle, expected_currency, expected_balance in expected:
         assert currency(handle) == expected_currency
         assert balance(handle) == expected_balance
+        kind, pin_hash = rows[handle]
+        if kind == "customer":
+            assert pin_hash is not None
+            assert pin_hash.startswith("pbkdf2_sha256$600000$")
+            assert "1234" not in pin_hash
+        else:
+            assert pin_hash is None
 
 
 def test_seed_balances_sum_to_zero_per_currency():
@@ -48,7 +58,7 @@ def test_seed_balances_sum_to_zero_per_currency():
 
 def test_seed_again_without_reset_changes_nothing():
     assert seed(reset=False) is True
-    handle_message("+263771000001", "SEND 5.00 TO 0771000002", "m-before-reseed")
+    handle_message("+263771000001", "SEND 5.00 TO 0771000002 1234", "m-before-reseed")
 
     assert seed(reset=False) is False
 
@@ -70,7 +80,7 @@ def test_seed_then_bal_command():
 def test_seed_then_send_from_tendai_to_shop():
     seed(reset=False)
 
-    reply = handle_message("+263771000001", "SEND 5.50 TO 0771000002", "m2")
+    reply = handle_message("+263771000001", "SEND 5.50 TO 0771000002 1234", "m2")
 
     assert reply == "Sent 5.50 USD to +263771000002. New balance: 24.50 USD"
     assert balance("+263771000001") == 2450

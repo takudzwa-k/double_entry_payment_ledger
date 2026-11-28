@@ -3,6 +3,9 @@ import sys
 
 from app.commands import format_cents
 from app.db import apply_migrations, get_connection, get_db_name, reset_schema
+from app.pin import set_pin
+
+DEMO_PIN = "1234"
 
 DEMO_ACCOUNTS = [
     ("sys-usd", "Cash source (USD)", "USD", "system", True, 0, None),
@@ -37,6 +40,7 @@ def _print_summary(conn) -> None:
     for handle, name, curr, bal_cents in rows:
         print(f"{handle or '':<16} {name:<20} {curr.strip():<5} {format_cents(int(bal_cents)):>12}")
     print()
+    print(f"Demo PIN for all customers: {DEMO_PIN}")
     print("Try it: python -m app.cli +263771000001")
 
 
@@ -109,6 +113,10 @@ def seed(reset: bool = False) -> bool:
                             deposit_cents,
                         ),
                     )
+
+        for handle, _, _, kind, _, _, _ in DEMO_ACCOUNTS:
+            if kind == "customer":
+                set_pin(handle, DEMO_PIN)
 
         _print_summary(conn)
         return True

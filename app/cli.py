@@ -1,7 +1,7 @@
 import sys
 import uuid
 
-from app.commands import handle_message
+from app.commands import HELP_TEXT, handle_message
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -11,7 +11,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     sender_handle = args[0]
-    print(f"SMS simulator for {sender_handle}. Type HELP for commands, 'quit' or Ctrl+D to exit.")
+    print(f"SMS simulator for {sender_handle}. Type 'quit' or Ctrl+D to exit.")
+    print(HELP_TEXT)
 
     while True:
         try:

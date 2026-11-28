@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 import psycopg
 
 from app.db import get_connection
@@ -38,6 +39,16 @@ class TransferResult:
     duplicate: bool
 
 
+@dataclass(frozen=True)
+class HistoryEntry:
+    transaction_id: int
+    kind: str
+    created_at: datetime
+    amount_cents: int
+    currency: str
+    counterparty: str | None
+
+
 def balance(handle: str) -> int:
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -68,6 +79,90 @@ def currency(handle: str) -> str:
             if row is None:
                 raise UnknownAccount(f"Unknown account handle: {handle!r}")
             return str(row[0]).strip()
+
+
+def history(handle: str, limit: int = 5) -> list[HistoryEntry]:
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1 or limit > 10:
+        raise ValueError(f"limit must be an integer between 1 and 10, got {limit!r}")
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH target AS (
+                    SELECT id
+                    FROM accounts
+                    WHERE handle = %s
+                ),
+                acct_txs AS (
+                    SELECT
+                        t.id AS transaction_id,
+                        t.kind,
+                        t.created_at,
+                        e.currency,
+                        SUM(e.amount)::BIGINT AS amount_cents,
+                        COUNT(*) AS self_entries
+                    FROM target
+                    JOIN entries e ON e.account_id = target.id
+                    JOIN transactions t ON t.id = e.transaction_id
+                    GROUP BY t.id, t.kind, t.created_at, e.currency
+                    ORDER BY t.created_at DESC, t.id DESC
+                    LIMIT %s
+                ),
+                other_parties AS (
+                    SELECT
+                        e.transaction_id,
+                        COUNT(*) AS other_entries,
+                        COUNT(DISTINCT e.account_id) AS other_accounts,
+                        MIN(a.handle) AS only_handle
+                    FROM acct_txs atx
+                    JOIN entries e ON e.transaction_id = atx.transaction_id
+                    JOIN accounts a ON a.id = e.account_id
+                    CROSS JOIN target
+                    WHERE e.account_id <> target.id
+                    GROUP BY e.transaction_id
+                )
+                SELECT
+                    target.id AS target_id,
+                    atx.transaction_id,
+                    atx.kind,
+                    atx.created_at,
+                    atx.amount_cents,
+                    atx.currency,
+                    CASE
+                        WHEN atx.self_entries = 1
+                         AND op.other_entries = 1
+                         AND op.other_accounts = 1
+                        THEN op.only_handle
+                        ELSE NULL
+                    END AS counterparty
+                FROM target
+                LEFT JOIN acct_txs atx ON TRUE
+                LEFT JOIN other_parties op ON op.transaction_id = atx.transaction_id
+                ORDER BY atx.created_at DESC NULLS LAST, atx.transaction_id DESC NULLS LAST
+                """,
+                (handle, limit),
+            )
+            rows = cur.fetchall()
+
+    if not rows:
+        raise UnknownAccount(f"Unknown account handle: {handle!r}")
+
+    entries: list[HistoryEntry] = []
+    for _, tx_id, kind, created_at, amount_cents, curr, counterparty in rows:
+        if tx_id is None:
+            continue
+        entries.append(
+            HistoryEntry(
+                transaction_id=int(tx_id),
+                kind=str(kind),
+                created_at=created_at,
+                amount_cents=int(amount_cents),
+                currency=str(curr).strip(),
+                counterparty=counterparty,
+            )
+        )
+    return entries
 
 
 def transfer(
